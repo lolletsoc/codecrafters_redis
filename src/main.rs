@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 
 enum Command {
@@ -12,9 +12,18 @@ fn main() {
         match stream {
             Ok(mut _stream) => {
                 println!("accepted new connection");
-                _stream
-                    .write("+PONG\r\n".to_owned().as_bytes())
-                    .expect("Failed to send bytes");
+
+                let mut command = "".to_owned();
+                let mut buf_reader = BufReader::new(&_stream);
+
+                match buf_reader.read_line(&mut command) {
+                    Ok(_) => {
+                        _stream
+                            .write("+PONG\r\n".to_owned().as_bytes())
+                            .expect("Failed to send bytes");
+                    }
+                    Err(_) => {}
+                }
             }
             Err(e) => {
                 println!("error: {}", e);
