@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::TcpListener;
 
 enum Command {
@@ -10,19 +10,34 @@ fn main() {
 
     for stream in listener.incoming() {
         match stream {
-            Ok(mut _stream) => {
+            Ok(_stream) => {
                 println!("accepted new connection");
 
                 let mut command = "".to_owned();
                 let mut buf_reader = BufReader::new(&_stream);
 
-                match buf_reader.read_line(&mut command) {
-                    Ok(_) => {
-                        _stream
+                let mut buf_writer = BufWriter::new(&_stream);
+
+                loop {
+                    let num_bytes = buf_reader
+                        .read_line(&mut command)
+                        .expect("Failed to read from stream");
+
+                    println!("Read {} bytes", num_bytes);
+                    println!("Received: {}", command);
+
+                    if num_bytes == 0 {
+                        break;
+                    }
+
+                    if command.ends_with("PING\r\n") {
+                        buf_writer
                             .write("+PONG\r\n".to_owned().as_bytes())
                             .expect("Failed to send bytes");
+
+                        buf_writer.flush().unwrap();
                     }
-                    Err(_) => {}
+                    command.clear();
                 }
             }
             Err(e) => {
