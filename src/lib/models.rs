@@ -1,4 +1,4 @@
-use crate::models::Command::{Echo, Keys, Ping, Unknown};
+use crate::models::Command::{Echo, Get, Keys, Ping, Set, Unknown};
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, BufStream};
 use tokio::net::TcpStream;
@@ -9,6 +9,8 @@ pub enum Command {
     Ping,
     Echo(String),
     Keys(String),
+    Get(String),
+    Set(String, String),
 }
 
 #[derive(Debug)]
@@ -54,6 +56,8 @@ pub async fn to_command(buf_stream: &mut BufStream<&mut TcpStream>) -> Option<Re
                 "ping" => Ping,
                 "echo" => Echo(args[0].clone()),
                 "keys" => Keys(args[0].clone()),
+                "get" => Get(args[0].clone()),
+                "set" => Set(args[0].clone(), args[1].clone()),
                 unknown => Unknown(unknown.to_string()),
             },
         });
