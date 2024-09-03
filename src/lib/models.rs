@@ -1,5 +1,6 @@
-use crate::models::Command::{Echo, Get, Keys, Ping, Set, Unknown};
+use crate::models::Command::{Config, Echo, Get, Keys, Ping, Set, Unknown};
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufStream};
 use tokio::net::TcpStream;
 
@@ -19,6 +20,7 @@ pub enum Command {
     Keys(String),
     Get(String),
     Set(SetParams),
+    Config(String),
 }
 
 #[derive(Debug)]
@@ -32,8 +34,21 @@ pub struct BulkString {
 }
 
 #[derive(Debug)]
-struct Array {
-    payload: Vec<BulkString>,
+pub struct Array {
+    pub payload: Vec<BulkString>,
+}
+
+impl Into<Vec<u8>> for Array {
+    fn into(self) -> Vec<u8> {
+        let mut bytes = format!("*{}\r\n", self.payload.len()).as_bytes().to_vec();
+
+        for bulk_string in self.payload {
+            let bulk_string_bytes: Vec<u8> = bulk_string.into();
+            bytes.extend(bulk_string_bytes);
+        }
+
+        bytes
+    }
 }
 
 impl Into<Vec<u8>> for BulkString {
@@ -70,6 +85,7 @@ pub async fn to_command(buf_stream: &mut BufStream<&mut TcpStream>) -> Option<Re
                 "keys" => Keys(args[0].clone()),
                 "get" => Get(args[0].clone()),
                 "set" => Set(build_set_params(args)),
+                "config" => Config(args[1].clone()),
                 unknown => Unknown(unknown.to_string()),
             },
         });

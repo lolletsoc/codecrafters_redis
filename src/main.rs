@@ -1,19 +1,32 @@
+use clap::Parser;
 use dashmap::DashMap;
-use redis_starter_rust::models::{to_command, BulkString, Command};
+use redis_starter_rust::models::{to_command, Array, BulkString, Command};
 use std::ops::Add;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncWriteExt, BufStream};
 use tokio::net::TcpListener;
 
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(long)]
+    dir: Option<String>,
+
+    #[arg(long)]
+    dbfilename: Option<String>,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), anyhow::Error> {
+    let args = Arc::new(Args::parse());
+
     let map: Arc<DashMap<String, (String, Option<SystemTime>)>> = Arc::new(DashMap::new());
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
 
     loop {
         let (mut stream, _) = listener.accept().await?;
         let map_ref = map.clone();
+        let args_ref = args.clone();
 
         tokio::spawn(async move {
             let mut buf_stream = BufStream::new(&mut stream);
@@ -25,6 +38,51 @@ async fn main() -> Result<(), anyhow::Error> {
                 }
 
                 match request.unwrap().command {
+                    Command::Config(field) => match field.as_str() {
+                        "dir" => {
+                            let array = Array {
+                                payload: vec![
+                                    BulkString {
+                                        payload: Some("dir".to_owned()),
+                                    },
+                                    BulkString {
+                                        payload: Some(args_ref.dir.clone().unwrap()),
+                                    },
+                                ],
+                            };
+
+                            let bytes: Vec<u8> = array.into();
+
+                            buf_stream
+                                .write(bytes.as_slice())
+                                .await
+                                .expect("Failed to send bytes");
+
+                            buf_stream.flush().await.unwrap();
+                        }
+                        "dbfilename" => {
+                            let array = Array {
+                                payload: vec![
+                                    BulkString {
+                                        payload: Some("dbfilename".to_owned()),
+                                    },
+                                    BulkString {
+                                        payload: Some(args_ref.dbfilename.clone().unwrap()),
+                                    },
+                                ],
+                            };
+
+                            let bytes: Vec<u8> = array.into();
+
+                            buf_stream
+                                .write(bytes.as_slice())
+                                .await
+                                .expect("Failed to send bytes");
+
+                            buf_stream.flush().await.unwrap();
+                        }
+                        _ => {}
+                    },
                     Command::Ping => {
                         buf_stream
                             .write("+PONG\r\n".to_owned().as_bytes())
