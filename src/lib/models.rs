@@ -4,13 +4,21 @@ use tokio::io::{AsyncBufReadExt, BufStream};
 use tokio::net::TcpStream;
 
 #[derive(Debug)]
+pub struct SetParams {
+    pub key: String,
+    pub value: String,
+
+    pub px: Option<u32>,
+}
+
+#[derive(Debug)]
 pub enum Command {
     Unknown(String),
     Ping,
     Echo(String),
     Keys(String),
     Get(String),
-    Set(String, String),
+    Set(SetParams),
 }
 
 #[derive(Debug)]
@@ -20,7 +28,7 @@ pub struct Request {
 
 #[derive(Debug)]
 pub struct BulkString {
-    pub payload: String,
+    pub payload: Option<String>,
 }
 
 #[derive(Debug)]
@@ -30,8 +38,12 @@ struct Array {
 
 impl Into<Vec<u8>> for BulkString {
     fn into(self) -> Vec<u8> {
-        let length = self.payload.len();
-        format!("{}{}\r\n{}\r\n", "$", length, self.payload).into_bytes()
+        if let Some(payload) = self.payload {
+            let length = payload.len();
+            format!("{}{}\r\n{}\r\n", "$", length, payload).into_bytes()
+        } else {
+            "$-1\r\n".to_owned().into_bytes()
+        }
     }
 }
 
@@ -48,7 +60,7 @@ pub async fn to_command(buf_stream: &mut BufStream<&mut TcpStream>) -> Option<Re
         for _ in 0..num_of_elems - 1 {
             read_cmd_part(buf_stream).await;
             let arg = read_cmd_part(buf_stream).await;
-            args.push(arg.unwrap());
+            args.push(arg.unwrap().to_lowercase());
         }
 
         return Some(Request {
@@ -57,12 +69,27 @@ pub async fn to_command(buf_stream: &mut BufStream<&mut TcpStream>) -> Option<Re
                 "echo" => Echo(args[0].clone()),
                 "keys" => Keys(args[0].clone()),
                 "get" => Get(args[0].clone()),
-                "set" => Set(args[0].clone(), args[1].clone()),
+                "set" => Set(build_set_params(args)),
                 unknown => Unknown(unknown.to_string()),
             },
         });
     }
     None
+}
+
+fn build_set_params(args: Vec<String>) -> SetParams {
+    let mut px = None;
+    for i in 2..args.len() {
+        if args[i] == "px" {
+            px = Some(u32::from_str(args[i + 1].as_str()).unwrap());
+        }
+    }
+
+    SetParams {
+        key: args[0].to_owned(),
+        value: args[1].to_owned(),
+        px,
+    }
 }
 
 async fn read_cmd_part(buf_stream: &mut BufStream<&mut TcpStream>) -> Option<String> {
