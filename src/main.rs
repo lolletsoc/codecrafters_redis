@@ -1,20 +1,11 @@
 use clap::Parser;
 use dashmap::DashMap;
-use redis_starter_rust::models::{to_command, Array, BulkString, Command};
-use std::ops::Add;
+use redis_starter_rust::models::{to_command, Args, BaseError};
+use redis_starter_rust::processing::{process_command, write_and_flush};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
-use tokio::io::{AsyncWriteExt, BufStream};
+use std::time::SystemTime;
+use tokio::io::BufStream;
 use tokio::net::TcpListener;
-
-#[derive(Parser, Debug)]
-struct Args {
-    #[arg(long)]
-    dir: Option<String>,
-
-    #[arg(long)]
-    dbfilename: Option<String>,
-}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), anyhow::Error> {
@@ -33,136 +24,23 @@ async fn main() -> Result<(), anyhow::Error> {
 
             loop {
                 let request = to_command(&mut buf_stream).await;
-                if let None = request {
-                    break;
-                }
-
-                match request.unwrap().command {
-                    Command::Config(field) => match field.as_str() {
-                        "dir" => {
-                            let array = Array {
-                                payload: vec![
-                                    BulkString {
-                                        payload: Some("dir".to_owned()),
-                                    },
-                                    BulkString {
-                                        payload: Some(args_ref.dir.clone().unwrap()),
-                                    },
-                                ],
-                            };
-
-                            let bytes: Vec<u8> = array.into();
-
-                            buf_stream
-                                .write(bytes.as_slice())
-                                .await
-                                .expect("Failed to send bytes");
-
-                            buf_stream.flush().await.unwrap();
-                        }
-                        "dbfilename" => {
-                            let array = Array {
-                                payload: vec![
-                                    BulkString {
-                                        payload: Some("dbfilename".to_owned()),
-                                    },
-                                    BulkString {
-                                        payload: Some(args_ref.dbfilename.clone().unwrap()),
-                                    },
-                                ],
-                            };
-
-                            let bytes: Vec<u8> = array.into();
-
-                            buf_stream
-                                .write(bytes.as_slice())
-                                .await
-                                .expect("Failed to send bytes");
-
-                            buf_stream.flush().await.unwrap();
-                        }
-                        _ => {}
-                    },
-                    Command::Ping => {
-                        buf_stream
-                            .write("+PONG\r\n".to_owned().as_bytes())
-                            .await
-                            .expect("Failed to send bytes");
-
-                        buf_stream.flush().await.unwrap();
+                match request {
+                    Ok(Some(request)) => {
+                        process_command(request.command, &args_ref, &map_ref, &mut buf_stream)
+                            .await;
                     }
-                    Command::Echo(ref message) => {
-                        let bulk_string = BulkString {
-                            payload: Some(message.to_string()),
-                        };
-
-                        let bytes: Vec<u8> = bulk_string.into();
-
-                        buf_stream
-                            .write(bytes.as_slice())
-                            .await
-                            .expect("Failed to send bytes");
-
-                        buf_stream.flush().await.unwrap();
+                    Ok(None) => {
+                        // EOF
+                        break;
                     }
-                    Command::Get(ref key) => {
-                        let result = map_ref.get(key);
-                        if let Some(result) = result {
-                            let value;
-                            if let Some(expire_at) = result.to_owned().1 {
-                                let now = SystemTime::now();
-                                if now >= expire_at {
-                                    value = None
-                                } else {
-                                    value = Some(result.to_owned().0)
-                                }
-                            } else {
-                                value = Some(result.to_owned().0)
-                            }
-
-                            let bulk_string = BulkString { payload: value };
-
-                            let bytes: Vec<u8> = bulk_string.into();
-
-                            buf_stream
-                                .write(bytes.as_slice())
-                                .await
-                                .expect("Failed to send bytes");
-
-                            buf_stream.flush().await.unwrap();
-                        } else {
-                            todo!();
-                        }
-                    }
-                    Command::Set(params) => {
-                        let value = params.value.to_string();
-                        let expire_at;
-                        if params.px.is_some() {
-                            expire_at = Some(
-                                SystemTime::now()
-                                    .add(Duration::from_millis(params.px.unwrap() as u64)),
-                            );
-                        } else {
-                            expire_at = None;
-                        }
-
-                        map_ref.insert(params.key.to_string(), (value, expire_at));
-                        let bulk_string = BulkString {
-                            payload: Some("OK".to_string()),
-                        };
-
-                        let bytes: Vec<u8> = bulk_string.into();
-
-                        buf_stream
-                            .write(bytes.as_slice())
-                            .await
-                            .expect("Failed to send bytes");
-
-                        buf_stream.flush().await.unwrap();
-                    }
-                    Command::Keys(_) => {}
-                    Command::Unknown(_) => {
-                        eprintln!("");
+                    Err(err) => {
+                        write_and_flush(
+                            &mut buf_stream,
+                            BaseError {
+                                message: err.to_string(),
+                            },
+                        )
+                        .await
                     }
                 }
             }
