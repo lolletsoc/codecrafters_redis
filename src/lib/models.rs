@@ -17,6 +17,7 @@ pub struct SetParams {
 pub enum Command {
     Unknown(String),
     Ping,
+    Save,
     Echo(String),
     Keys(String),
     Get(String),

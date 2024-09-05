@@ -10,8 +10,12 @@ use tokio::net::TcpListener;
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), anyhow::Error> {
     let args = Arc::new(Args::parse());
-
     let map: Arc<DashMap<String, (String, Option<SystemTime>)>> = Arc::new(DashMap::new());
+
+    if let (Some(dir), Some(filename)) = (&args.dir, &args.dbfilename) {
+
+    }
+
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
 
     loop {

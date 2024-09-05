@@ -107,6 +107,7 @@ pub async fn process_command(
         Command::Unknown(_) => {
             eprintln!("");
         }
+        Command::Save => todo!(),
     }
 }
 
