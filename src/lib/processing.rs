@@ -67,17 +67,17 @@ pub async fn process_command(
         Command::Get(ref key) => {
             let result = map.get(key);
             if let Some(result) = result {
-                let value;
-                if let Some(expire_at) = result.to_owned().1 {
-                    let now = SystemTime::now();
-                    if now >= expire_at {
-                        value = None
-                    } else {
-                        value = Some(result.to_owned().0)
+                let value = match result.to_owned().1 {
+                    Some(expire_at) => {
+                        let now = SystemTime::now();
+                        if now >= expire_at {
+                            None
+                        } else {
+                            Some(result.to_owned().0)
+                        }
                     }
-                } else {
-                    value = Some(result.to_owned().0)
-                }
+                    None => Some(result.to_owned().0),
+                };
 
                 write_and_flush(buf_stream, BulkString { payload: value }).await;
             } else {
@@ -86,13 +86,12 @@ pub async fn process_command(
         }
         Command::Set(params) => {
             let value = params.value.to_string();
-            let expire_at;
-            if params.px.is_some() {
-                expire_at =
-                    Some(SystemTime::now().add(Duration::from_millis(params.px.unwrap() as u64)));
-            } else {
-                expire_at = None;
-            }
+            let expire_at = match params.px {
+                Some(_) => {
+                    Some(SystemTime::now().add(Duration::from_millis(params.px.unwrap() as u64)))
+                }
+                None => None,
+            };
 
             map.insert(params.key.to_string(), (value, expire_at));
             write_and_flush(
@@ -103,7 +102,23 @@ pub async fn process_command(
             )
             .await;
         }
-        Command::Keys(_) => {}
+        Command::Keys(_) => {
+            // Assuming a wildcard ('*') for now
+            let bulk_strings = map
+                .iter()
+                .map(|e| BulkString {
+                    payload: Some(e.key().to_string()),
+                })
+                .collect();
+
+            write_and_flush(
+                buf_stream,
+                Array {
+                    payload: bulk_strings,
+                },
+            )
+            .await;
+        }
         Command::Unknown(_) => {
             eprintln!("");
         }

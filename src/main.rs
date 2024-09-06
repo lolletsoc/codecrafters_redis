@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::io::BufStream;
 use tokio::net::TcpListener;
+use redis_starter_rust::rdb::read_rdb;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), anyhow::Error> {
@@ -13,7 +14,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let map: Arc<DashMap<String, (String, Option<SystemTime>)>> = Arc::new(DashMap::new());
 
     if let (Some(dir), Some(filename)) = (&args.dir, &args.dbfilename) {
-
+        read_rdb(dir, filename, map.clone()).await?;
     }
 
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
