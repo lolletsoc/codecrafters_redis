@@ -51,6 +51,9 @@ pub struct Args {
 
     #[arg(long, default_value_t = 6379)]
     pub port: u16,
+
+    #[arg(long)]
+    pub replicaof: Option<String>,
 }
 
 #[derive(Debug)]

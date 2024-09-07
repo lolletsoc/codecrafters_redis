@@ -53,8 +53,13 @@ pub async fn process_command(
             }
         },
         Command::Info(_) => {
+            let master_or_slave = match args.replicaof {
+                Some(_) => "slave",
+                None => "master",
+            };
+
             let replication = BulkString {
-                payload: Some("role:master".to_string()),
+                payload: Some(format!("role:{}", master_or_slave).to_string()),
             };
             write_and_flush(buf_stream, replication).await;
         }
