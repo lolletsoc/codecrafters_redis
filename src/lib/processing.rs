@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::replication::MasterReplicationInfo;
 use dashmap::DashMap;
 use std::ops::Add;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use tokio::net::TcpStream;
 pub async fn process_command(
     command: Command,
     args: &Arc<Args>,
+    rep_ref: &Arc<MasterReplicationInfo>,
     map: &Arc<DashMap<String, (String, Option<SystemTime>)>>,
     buf_stream: &mut BufStream<&mut TcpStream>,
 ) {
@@ -59,7 +61,13 @@ pub async fn process_command(
             };
 
             let replication = BulkString {
-                payload: Some(format!("role:{}", master_or_slave).to_string()),
+                payload: Some(
+                    format!(
+                        "role:{}\rmaster_replid:{}\rmaster_repl_offset:{}",
+                        master_or_slave, rep_ref.replid, rep_ref.repl_offset
+                    )
+                    .to_string(),
+                ),
             };
             write_and_flush(buf_stream, replication).await;
         }

@@ -3,6 +3,7 @@ use dashmap::DashMap;
 use redis_starter_rust::models::{to_command, Args, BaseError};
 use redis_starter_rust::processing::{process_command, write_and_flush};
 use redis_starter_rust::rdb::read_rdb;
+use redis_starter_rust::replication::MasterReplicationInfo;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::io::BufStream;
@@ -12,6 +13,7 @@ use tokio::net::TcpListener;
 async fn main() -> Result<(), anyhow::Error> {
     let args = Arc::new(Args::parse());
     let map: Arc<DashMap<String, (String, Option<SystemTime>)>> = Arc::new(DashMap::new());
+    let master_rep_info = Arc::new(MasterReplicationInfo::new());
 
     if let (Some(dir), Some(filename)) = (&args.dir, &args.dbfilename) {
         read_rdb(dir, filename, map.clone()).await?;
@@ -23,6 +25,7 @@ async fn main() -> Result<(), anyhow::Error> {
         let (mut stream, _) = listener.accept().await?;
         let map_ref = map.clone();
         let args_ref = args.clone();
+        let rep_ref = master_rep_info.clone();
 
         tokio::spawn(async move {
             let mut buf_stream = BufStream::new(&mut stream);
@@ -31,8 +34,14 @@ async fn main() -> Result<(), anyhow::Error> {
                 let request = to_command(&mut buf_stream).await;
                 match request {
                     Ok(Some(request)) => {
-                        process_command(request.command, &args_ref, &map_ref, &mut buf_stream)
-                            .await;
+                        process_command(
+                            request.command,
+                            &args_ref,
+                            &rep_ref,
+                            &map_ref,
+                            &mut buf_stream,
+                        )
+                        .await;
                     }
                     Ok(None) => {
                         // EOF
