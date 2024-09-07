@@ -52,6 +52,12 @@ pub async fn process_command(
                 .await
             }
         },
+        Command::Info(_) => {
+            let replication = BulkString {
+                payload: Some("role:master".to_string()),
+            };
+            write_and_flush(buf_stream, replication).await;
+        }
         Command::Ping => {
             write_and_flush(buf_stream, "+PONG\r\n").await;
         }

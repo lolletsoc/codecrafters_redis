@@ -1,4 +1,4 @@
-use crate::models::Command::{Config, Echo, Get, Keys, Ping, Set, Unknown};
+use crate::models::Command::{Config, Echo, Get, Info, Keys, Ping, Set, Unknown};
 use anyhow::Context;
 use clap::Parser;
 use std::str::FromStr;
@@ -18,6 +18,7 @@ pub enum Command {
     Unknown(String),
     Ping,
     Save,
+    Info(String),
     Echo(String),
     Keys(String),
     Get(String),
@@ -113,6 +114,7 @@ pub async fn to_command(
         return Ok(Some(Request {
             command: match command.to_lowercase().as_str() {
                 "ping" => Ping,
+                "info" => Info(args[0].clone()),
                 "echo" => Echo(args[0].clone()),
                 "keys" => Keys(args[0].clone()),
                 "get" => Get(args[0].clone()),
