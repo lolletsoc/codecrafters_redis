@@ -2,25 +2,26 @@ use dashmap::DashMap;
 use deku::bitvec::*;
 use deku::prelude::*;
 use std::fs::File;
+use std::ops::{Add, Sub};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, DekuRead, DekuWrite)]
+#[derive(Debug, DekuRead)]
 struct RDB {
     header: Header,
     metadata: Metadata,
     database: Database,
 }
 
-#[derive(Debug, DekuRead, DekuWrite)]
+#[derive(Debug, DekuRead)]
 #[deku(magic = b"REDIS")]
 struct Header {
     #[deku(bytes = "4")]
     rd_version: [u8; 4],
 }
 
-#[derive(Debug, DekuRead, DekuWrite)]
+#[derive(Debug, DekuRead)]
 struct Metadata {
     #[deku(until = "|v: &u8| *v == 0xFA")]
     start: Vec<u8>,
@@ -32,47 +33,44 @@ struct Metadata {
     values: Vec<u8>,
 }
 
-#[derive(Debug, DekuRead, DekuWrite)]
+#[derive(Debug, DekuRead)]
 struct Database {
     #[deku(until = "|v: &u8| *v == 0xFE")]
     start: Vec<u8>,
 
-    #[deku(bytes = "1")]
     index: u8,
 
-    flag: u8,
+    resize_db_flag: u8,
 
+    // Size of the whole table
     hash_table_size: EncodedInteger,
+
+    // The number of entries which expire within the above
+    // i.e. must be <= hash_table_size
     hash_table_size_with_expiry: EncodedInteger,
 
-    #[deku(count = "hash_table_size_with_expiry.value")]
-    expiring_entries: Vec<ExpiringKeyValuePair>,
-
     #[deku(count = "hash_table_size.value")]
-    non_expiring_entries: Vec<NonExpiringKeyValuePair>,
+    kv_pairs: Vec<KeyValuePair>,
 }
 
-#[derive(Debug, DekuRead, DekuWrite)]
-struct ExpiringKeyValuePair {
-    flag: u8,
+#[derive(Debug, DekuRead)]
+struct KeyValuePair {
+    expiring_or_type_flag: u8,
 
-    #[deku(cond = "*flag == 0xFD")]
+    #[deku(cond = "*(expiring_or_type_flag) == 0xFD")]
     expiry_time_in_s: Option<u32>,
 
-    #[deku(cond = "*flag == 0xFC")]
+    #[deku(cond = "*(expiring_or_type_flag) == 0xFC")]
     expiry_time_in_ms: Option<u64>,
 
-    kv: NonExpiringKeyValuePair,
-}
-
-#[derive(Debug, DekuRead, DekuWrite)]
-struct NonExpiringKeyValuePair {
+    #[deku(cond = "*(expiring_or_type_flag) == 0xFC || *(expiring_or_type_flag) == 0xFD")]
     _type: u8,
+
     key: EncodedString,
     value: EncodedString,
 }
 
-#[derive(Debug, DekuRead, DekuWrite)]
+#[derive(Debug, DekuRead)]
 struct EncodedInteger {
     #[deku(reader = "EncodedLength::read_length(deku::reader)")]
     length: u8,
@@ -81,9 +79,9 @@ struct EncodedInteger {
     pub value: u32,
 }
 
-#[derive(Debug, DekuRead, DekuWrite)]
+#[derive(Debug, DekuRead)]
 struct EncodedString {
-    #[deku(bytes = "1", update = "self.value.len()")]
+    #[deku(bytes = "1")]
     length: u8,
 
     #[deku(count = "length")]
@@ -101,17 +99,25 @@ pub async fn read_rdb(
         Ok(mut file) => {
             match RDB::from_reader((&mut file, 0)) {
                 Ok((_, rdb)) => {
-                    rdb.database.expiring_entries.iter().for_each(|e| {
-                        arc.insert(
-                            String::from_utf8(e.kv.key.value.clone()).unwrap(),
-                            (String::from_utf8(e.kv.value.value.clone()).unwrap(), None),
-                        );
-                    });
+                    rdb.database.kv_pairs.iter().for_each(|e| {
+                        let expire_duration;
+                        if let Some(ms_expiry) = e.expiry_time_in_ms {
+                            expire_duration = Some(Duration::from_millis(ms_expiry));
+                        } else if let Some(s_expiry) = e.expiry_time_in_s {
+                            expire_duration = Some(Duration::from_secs(s_expiry as u64));
+                        } else {
+                            expire_duration = None;
+                        }
 
-                    rdb.database.non_expiring_entries.iter().for_each(|e| {
                         arc.insert(
                             String::from_utf8(e.key.value.clone()).unwrap(),
-                            (String::from_utf8(e.value.value.clone()).unwrap(), None),
+                            (
+                                String::from_utf8(e.value.value.clone()).unwrap(),
+                                match expire_duration {
+                                    Some(dur) => Some(UNIX_EPOCH.add(dur)),
+                                    None => None,
+                                },
+                            ),
                         );
                     });
                     Ok(())
@@ -128,14 +134,15 @@ pub async fn read_rdb(
     }
 }
 
-struct EncodedLength(u32);
+struct EncodedLength(());
 
 impl EncodedLength {
     fn read_value<R: std::io::Read>(reader: &mut Reader<R>, length: u8) -> Result<u32, DekuError> {
         let read_bits = reader.read_bits(length as usize).expect("");
         let binding = read_bits.unwrap();
 
-        Ok(binding.load_be::<u32>())
+        let i = binding.load_be::<u32>();
+        Ok(i)
     }
     fn read_length<R: std::io::Read>(reader: &mut Reader<R>) -> Result<u8, DekuError> {
         let result = reader.read_bits(2).unwrap().unwrap();
