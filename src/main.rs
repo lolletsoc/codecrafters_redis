@@ -3,7 +3,7 @@ use dashmap::DashMap;
 use redis_starter_rust::models::{to_command, Args, BaseError};
 use redis_starter_rust::processing::{process_command, write_and_flush};
 use redis_starter_rust::rdb::read_rdb;
-use redis_starter_rust::replication::MasterReplicationInfo;
+use redis_starter_rust::replication::{init_replication, MasterReplicationInfo};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::io::BufStream;
@@ -17,6 +17,12 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if let (Some(dir), Some(filename)) = (&args.dir, &args.dbfilename) {
         read_rdb(dir, filename, map.clone()).await?;
+    }
+
+    if let Some(repinfo) = &args.replicaof {
+        init_replication(repinfo)
+            .await
+            .expect("Replication init failed");
     }
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
