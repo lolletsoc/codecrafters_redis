@@ -2,11 +2,11 @@ use clap::Parser;
 use dashmap::DashMap;
 use redis_starter_rust::models::{to_command, Args, BaseError};
 use redis_starter_rust::processing::{process_command, write_and_flush};
+use redis_starter_rust::rdb::read_rdb;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::io::BufStream;
 use tokio::net::TcpListener;
-use redis_starter_rust::rdb::read_rdb;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), anyhow::Error> {
@@ -17,7 +17,7 @@ async fn main() -> Result<(), anyhow::Error> {
         read_rdb(dir, filename, map.clone()).await?;
     }
 
-    let listener = TcpListener::bind("127.0.0.1:6379").await?;
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
 
     loop {
         let (mut stream, _) = listener.accept().await?;

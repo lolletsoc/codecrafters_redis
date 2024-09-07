@@ -47,6 +47,9 @@ pub struct Args {
 
     #[arg(long)]
     pub dbfilename: Option<String>,
+
+    #[arg(long, default_value_t = 6379)]
+    pub port: u16,
 }
 
 #[derive(Debug)]
