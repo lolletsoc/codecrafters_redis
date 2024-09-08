@@ -1,6 +1,8 @@
 use crate::models::*;
 use crate::replication::MasterReplicationInfo;
 use anyhow::Context;
+use base64::{engine::general_purpose, Engine as _};
+use bytes::buf;
 use dashmap::DashMap;
 use std::ops::Add;
 use std::sync::Arc;
@@ -151,7 +153,12 @@ pub async fn process_command(
                     value: format!("FULLRESYNC {} 0", rep_ref.replid),
                 },
             )
-            .await
+            .await;
+
+            let empty_rdb = "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==".as_bytes();
+            let empty_rdb_bytes = general_purpose::STANDARD.decode(empty_rdb).unwrap();
+            write_and_flush(buf_stream, format!("${}\r\n", empty_rdb_bytes.len())).await;
+            write_and_flush(buf_stream, empty_rdb_bytes.as_slice()).await;
         }
     }
 }
