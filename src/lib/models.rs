@@ -25,6 +25,7 @@ pub enum Command {
     Set(SetParams),
     Config(String),
     ReplConf(String, String),
+    PSync(String, String),
 }
 
 #[derive(Debug)]
@@ -145,6 +146,17 @@ impl Into<Vec<u8>> for Command {
                 });
                 bulk_strings.push(BulkString {
                     payload: Some(value.clone()),
+                });
+            }
+            PSync(repl_id, offset) => {
+                bulk_strings.push(BulkString {
+                    payload: Some("PSYNC".to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(repl_id.clone()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(offset.clone()),
                 });
             }
         }

@@ -1,4 +1,4 @@
-use crate::models::Command::{Ping, ReplConf};
+use crate::models::Command::{PSync, Ping, ReplConf};
 use crate::models::{Args, Array, BulkString};
 use crate::processing::{receive_ack, write_and_flush};
 use anyhow::Context;
@@ -52,6 +52,8 @@ pub async fn init_replication(replicaof: &str, args: &Arc<Args>) -> anyhow::Resu
     )
     .await;
     receive_ack(&mut stream).await?;
+
+    write_and_flush(&mut stream, PSync("?".to_string(), "-1".to_string())).await;
 
     Ok(())
 }

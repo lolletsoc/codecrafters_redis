@@ -144,6 +144,7 @@ pub async fn process_command(
         }
         Command::Save => todo!(),
         Command::ReplConf(_, _) => todo!(),
+        Command::PSync(_, _) => todo!(),
     }
 }
 
