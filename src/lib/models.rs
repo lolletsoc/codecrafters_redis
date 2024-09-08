@@ -222,6 +222,7 @@ pub async fn to_command(
                 "get" => Get(args[0].clone()),
                 "set" => Set(build_set_params(args)),
                 "config" => Config(args[1].clone()),
+                "replconf" => ReplConf(args[0].clone(), args[1].clone()),
                 unknown => Unknown(unknown.to_string()),
             },
         }));

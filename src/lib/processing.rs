@@ -143,7 +143,7 @@ pub async fn process_command(
             eprintln!("");
         }
         Command::Save => todo!(),
-        Command::ReplConf(_, _) => todo!(),
+        Command::ReplConf(_, _) => send_ack(buf_stream).await,
         Command::PSync(_, _) => todo!(),
     }
 }
@@ -156,6 +156,15 @@ where
 
     buf_stream
         .write(bytes.as_slice())
+        .await
+        .expect("Failed to send bytes");
+
+    buf_stream.flush().await.unwrap();
+}
+
+pub async fn send_ack(buf_stream: &mut BufStream<&mut TcpStream>) {
+    buf_stream
+        .write("+OK\r\n".as_bytes())
         .await
         .expect("Failed to send bytes");
 
