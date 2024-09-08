@@ -34,6 +34,11 @@ pub struct Request {
 }
 
 #[derive(Debug)]
+pub struct SimpleString {
+    pub value: String,
+}
+
+#[derive(Debug)]
 pub struct BulkString {
     pub payload: Option<String>,
 }
@@ -167,6 +172,12 @@ impl Into<Vec<u8>> for Command {
     }
 }
 
+impl Into<Vec<u8>> for SimpleString {
+    fn into(self) -> Vec<u8> {
+        format!("+{}\r\n", self.value).as_bytes().to_vec()
+    }
+}
+
 impl Into<Vec<u8>> for Array {
     fn into(self) -> Vec<u8> {
         let mut bytes = format!("*{}\r\n", self.payload.len()).as_bytes().to_vec();
@@ -223,6 +234,7 @@ pub async fn to_command(
                 "set" => Set(build_set_params(args)),
                 "config" => Config(args[1].clone()),
                 "replconf" => ReplConf(args[0].clone(), args[1].clone()),
+                "psync" => PSync(args[0].clone(), args[1].clone()),
                 unknown => Unknown(unknown.to_string()),
             },
         }));

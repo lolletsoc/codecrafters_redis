@@ -144,7 +144,15 @@ pub async fn process_command(
         }
         Command::Save => todo!(),
         Command::ReplConf(_, _) => send_ack(buf_stream).await,
-        Command::PSync(_, _) => todo!(),
+        Command::PSync(_, _) => {
+            write_and_flush(
+                buf_stream,
+                SimpleString {
+                    value: format!("FULLRESYNC {} 0", rep_ref.replid),
+                },
+            )
+            .await
+        }
     }
 }
 
