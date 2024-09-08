@@ -1,4 +1,4 @@
-use crate::models::Command::{Config, Echo, Get, Info, Keys, Ping, Set, Unknown};
+use crate::models::Command::*;
 use anyhow::Context;
 use clap::Parser;
 use std::str::FromStr;
@@ -24,6 +24,7 @@ pub enum Command {
     Get(String),
     Set(SetParams),
     Config(String),
+    ReplConf(String, String),
 }
 
 #[derive(Debug)]
@@ -65,6 +66,92 @@ impl Into<Vec<u8>> for BaseError {
     fn into(self) -> Vec<u8> {
         let redis_err = format!("-{}", self.message);
         redis_err.into_bytes()
+    }
+}
+
+impl Into<Vec<u8>> for Command {
+    fn into(self) -> Vec<u8> {
+        let mut bulk_strings = vec![];
+        match self {
+            Unknown(_) => panic!("Cannot convert an UNKNOWN command"),
+            Ping => bulk_strings.push(BulkString {
+                payload: Some("PING".to_string()),
+            }),
+            Save => bulk_strings.push(BulkString {
+                payload: Some("SAVE".to_string()),
+            }),
+            Info(key) => {
+                bulk_strings.push(BulkString {
+                    payload: Some("INFO".to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(key.clone()),
+                })
+            }
+            Echo(value) => {
+                bulk_strings.push(BulkString {
+                    payload: Some("ECHO".to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(value.clone()),
+                })
+            }
+            Keys(pattern) => {
+                bulk_strings.push(BulkString {
+                    payload: Some("KEYS".to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(pattern.clone()),
+                })
+            }
+            Get(key) => {
+                bulk_strings.push(BulkString {
+                    payload: Some("GET".to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(key.clone()),
+                })
+            }
+            Set(params) => {
+                bulk_strings.push(BulkString {
+                    payload: Some("SET".to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(params.key.clone()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(params.key.clone()),
+                });
+                if let Some(px) = params.px {
+                    bulk_strings.push(BulkString {
+                        payload: Some(px.to_string()),
+                    });
+                }
+            }
+            Config(key) => {
+                bulk_strings.push(BulkString {
+                    payload: Some("CONFIG".to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(key.clone()),
+                })
+            }
+            ReplConf(key, value) => {
+                bulk_strings.push(BulkString {
+                    payload: Some("REPLCONF".to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(key.clone()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(value.clone()),
+                });
+            }
+        }
+        let array = Array {
+            payload: bulk_strings,
+        };
+        array.into()
     }
 }
 

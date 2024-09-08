@@ -1,10 +1,11 @@
 use crate::models::*;
 use crate::replication::MasterReplicationInfo;
+use anyhow::Context;
 use dashmap::DashMap;
 use std::ops::Add;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::io::{AsyncWriteExt, BufStream};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufStream};
 use tokio::net::TcpStream;
 
 pub async fn process_command(
@@ -142,6 +143,7 @@ pub async fn process_command(
             eprintln!("");
         }
         Command::Save => todo!(),
+        Command::ReplConf(_, _) => todo!(),
     }
 }
 
@@ -157,4 +159,21 @@ where
         .expect("Failed to send bytes");
 
     buf_stream.flush().await.unwrap();
+}
+
+pub async fn receive_ack(buf_stream: &mut BufStream<&mut TcpStream>) -> anyhow::Result<()> {
+    let mut ack = String::new();
+    buf_stream
+        .read_line(&mut ack)
+        .await
+        .with_context(|| "Failed to receive bytes")?;
+
+    if !ack.eq("+OK\r") {
+        Ok(())
+    } else {
+        Err(anyhow::Error::msg(format!(
+            "Received unexpected ACK: {}",
+            ack
+        )))
+    }
 }

@@ -20,7 +20,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if let Some(repinfo) = &args.replicaof {
-        init_replication(repinfo)
+        init_replication(repinfo, &args)
             .await
             .expect("Replication init failed");
     }
