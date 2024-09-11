@@ -25,6 +25,7 @@ pub enum Command {
     Get(String),
     Set(SetParams),
     Config(String),
+    Wait(u32, u32),
     ReplConf(String, String),
     PSync(String, String),
 }
@@ -37,6 +38,11 @@ pub struct Request {
 #[derive(Debug)]
 pub struct SimpleString {
     pub value: String,
+}
+
+#[derive(Debug)]
+pub struct RespInteger {
+    pub value: i64,
 }
 
 #[derive(Debug)]
@@ -165,6 +171,17 @@ impl Into<Vec<u8>> for Command {
                     payload: Some(offset.clone()),
                 });
             }
+            Wait(replicas, timeout) => {
+                bulk_strings.push(BulkString {
+                    payload: Some("WAIT".to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(replicas.to_string()),
+                });
+                bulk_strings.push(BulkString {
+                    payload: Some(timeout.to_string()),
+                });
+            }
         }
         let array = Array {
             payload: bulk_strings,
@@ -176,6 +193,12 @@ impl Into<Vec<u8>> for Command {
 impl Into<Vec<u8>> for SimpleString {
     fn into(self) -> Vec<u8> {
         format!("+{}\r\n", self.value).as_bytes().to_vec()
+    }
+}
+
+impl Into<Vec<u8>> for RespInteger {
+    fn into(self) -> Vec<u8> {
+        format!(":{}\r\n", self.value).as_bytes().to_vec()
     }
 }
 
@@ -234,6 +257,7 @@ pub async fn to_command(
 
         let command = match command.to_lowercase().as_str() {
             "ping" => Ping,
+            "wait" => Wait(args[0].parse()?, args[1].parse()?),
             "info" => Info(args[0].clone()),
             "echo" => Echo(args[0].clone()),
             "keys" => Keys(args[0].clone()),

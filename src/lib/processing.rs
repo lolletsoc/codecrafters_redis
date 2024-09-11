@@ -4,7 +4,7 @@ use anyhow::Context;
 use base64::{engine::general_purpose, Engine as _};
 use dashmap::DashMap;
 use std::ops::Add;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -30,6 +30,9 @@ pub async fn process_command(
     );
     let mut guard = buf_stream.lock().await;
     match command {
+        Command::Wait(num_replicas, timeout) => {
+            write_and_flush(&mut guard, RespInteger { value: 0 }).await;
+        }
         Command::Config(field) => match field.as_str() {
             "dir" => {
                 let array = Array {
