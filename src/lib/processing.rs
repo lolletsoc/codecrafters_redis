@@ -31,7 +31,13 @@ pub async fn process_command(
     let mut guard = buf_stream.lock().await;
     match command {
         Command::Wait(num_replicas, timeout) => {
-            write_and_flush(&mut guard, RespInteger { value: 0 }).await;
+            write_and_flush(
+                &mut guard,
+                RespInteger {
+                    value: replicas.lock().await.len() as i64,
+                },
+            )
+            .await;
         }
         Command::Config(field) => match field.as_str() {
             "dir" => {
