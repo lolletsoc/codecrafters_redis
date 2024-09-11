@@ -5,7 +5,7 @@ use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, BufStream};
 use tokio::net::TcpStream;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SetParams {
     pub key: String,
     pub value: String,
@@ -13,7 +13,7 @@ pub struct SetParams {
     pub px: Option<u32>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Command {
     Unknown(String),
     Ping,
@@ -126,7 +126,7 @@ impl Into<Vec<u8>> for Command {
                     payload: Some(params.key.clone()),
                 });
                 bulk_strings.push(BulkString {
-                    payload: Some(params.key.clone()),
+                    payload: Some(params.value.clone()),
                 });
                 if let Some(px) = params.px {
                     bulk_strings.push(BulkString {
@@ -203,24 +203,24 @@ impl Into<Vec<u8>> for BulkString {
 }
 
 pub async fn to_command(
-    buf_stream: &mut BufStream<&mut TcpStream>,
+    mut buf_stream: &mut BufStream<TcpStream>,
 ) -> anyhow::Result<Option<Request>> {
-    let result = read_cmd_part(buf_stream).await;
+    let result = read_cmd_part(&mut buf_stream).await;
 
     if let Some(part) = result {
         let num_of_elems = u8::from_str(&part[1usize..2usize])
             .with_context(|| "Expecting length of elements, such as *2")?;
 
-        read_cmd_part(buf_stream).await;
+        read_cmd_part(&mut buf_stream).await;
 
-        let command = read_cmd_part(buf_stream)
+        let command = read_cmd_part(&mut buf_stream)
             .await
             .with_context(|| "Expecting a base command, such as GET")?;
 
         let mut args = Vec::with_capacity((num_of_elems - 1) as usize);
         for _ in 0..num_of_elems - 1 {
-            read_cmd_part(buf_stream).await;
-            let arg = read_cmd_part(buf_stream).await;
+            read_cmd_part(&mut buf_stream).await;
+            let arg = read_cmd_part(&mut buf_stream).await;
             args.push(arg.unwrap().to_lowercase());
         }
 
@@ -257,7 +257,7 @@ fn build_set_params(args: Vec<String>) -> SetParams {
     }
 }
 
-async fn read_cmd_part(buf_stream: &mut BufStream<&mut TcpStream>) -> Option<String> {
+async fn read_cmd_part(buf_stream: &mut BufStream<TcpStream>) -> Option<String> {
     let mut command = "".to_owned();
     let bytes_read = buf_stream
         .read_line(&mut command)

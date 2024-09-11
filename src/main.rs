@@ -1,23 +1,32 @@
 use clap::Parser;
 use dashmap::DashMap;
-use redis_starter_rust::models::{to_command, Args, BaseError};
+use redis_starter_rust::models::{to_command, Args, BaseError, Command};
 use redis_starter_rust::processing::{process_command, write_and_flush};
 use redis_starter_rust::rdb::read_rdb;
 use redis_starter_rust::replication::{init_replication, MasterReplicationInfo};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::io::BufStream;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::{mpsc, Mutex};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), anyhow::Error> {
     let args = Arc::new(Args::parse());
     let map: Arc<DashMap<String, (String, Option<SystemTime>)>> = Arc::new(DashMap::new());
     let master_rep_info = Arc::new(MasterReplicationInfo::new());
+    let replicas = Arc::new(Mutex::new(Vec::new()));
+    let (tx, rx): (Sender<Command>, Receiver<Command>) = mpsc::channel(100);
+    let tx = Arc::new(tx);
+    let rx = Arc::new(Mutex::new(rx));
 
     if let (Some(dir), Some(filename)) = (&args.dir, &args.dbfilename) {
         read_rdb(dir, filename, map.clone()).await?;
     }
+
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
+    println!("Listening on {}", args.port);
 
     if let Some(repinfo) = &args.replicaof {
         init_replication(repinfo, &args)
@@ -25,19 +34,28 @@ async fn main() -> Result<(), anyhow::Error> {
             .expect("Replication init failed");
     }
 
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
-
     loop {
-        let (mut stream, _) = listener.accept().await?;
+        let (stream, _) = listener.accept().await?;
         let map_ref = map.clone();
         let args_ref = args.clone();
         let rep_ref = master_rep_info.clone();
+        let replicas = replicas.clone();
+        let tx = tx.clone();
+        let rx = rx.clone();
 
+        let std_stream = stream.into_std().unwrap();
+        let cloned_stream = std_stream.try_clone().unwrap();
+
+        let cloned_tcp_stream = TcpStream::from_std(cloned_stream).unwrap();
+        let cloned_buf_stream = BufStream::new(cloned_tcp_stream);
+        let buf_stream = Arc::new(Mutex::new(cloned_buf_stream));
+
+        let arc_stream = Arc::new(Mutex::new(TcpStream::from_std(std_stream).unwrap()));
         tokio::spawn(async move {
-            let mut buf_stream = BufStream::new(&mut stream);
-
             loop {
-                let request = to_command(&mut buf_stream).await;
+                let binding = buf_stream.clone();
+                let mut guard = binding.lock().await;
+                let request = to_command(&mut guard).await;
                 match request {
                     Ok(Some(request)) => {
                         process_command(
@@ -45,7 +63,10 @@ async fn main() -> Result<(), anyhow::Error> {
                             &args_ref,
                             &rep_ref,
                             &map_ref,
-                            &mut buf_stream,
+                            arc_stream.clone(),
+                            &replicas,
+                            &tx,
+                            &rx,
                         )
                         .await;
                     }
@@ -54,13 +75,16 @@ async fn main() -> Result<(), anyhow::Error> {
                         break;
                     }
                     Err(err) => {
+                        let arc = arc_stream.clone();
+                        let mut stream_guard = arc.lock().await;
                         write_and_flush(
-                            &mut buf_stream,
+                            &mut stream_guard,
                             BaseError {
                                 message: err.to_string(),
                             },
                         )
-                        .await
+                        .await;
+                        break;
                     }
                 }
             }

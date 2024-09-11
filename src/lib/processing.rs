@@ -2,21 +2,26 @@ use crate::models::*;
 use crate::replication::MasterReplicationInfo;
 use anyhow::Context;
 use base64::{engine::general_purpose, Engine as _};
-use bytes::buf;
 use dashmap::DashMap;
 use std::ops::Add;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 
 pub async fn process_command(
     command: Command,
     args: &Arc<Args>,
     rep_ref: &Arc<MasterReplicationInfo>,
     map: &Arc<DashMap<String, (String, Option<SystemTime>)>>,
-    buf_stream: &mut BufStream<&mut TcpStream>,
+    buf_stream: Arc<Mutex<TcpStream>>,
+    replicas: &Arc<Mutex<Vec<Arc<Mutex<TcpStream>>>>>,
+    tx: &Arc<Sender<Command>>,
+    rx: &Arc<Mutex<Receiver<Command>>>,
 ) {
+    let mut guard = buf_stream.lock().await;
     match command {
         Command::Config(field) => match field.as_str() {
             "dir" => {
@@ -31,7 +36,7 @@ pub async fn process_command(
                     ],
                 };
 
-                write_and_flush(buf_stream, array).await;
+                write_and_flush(&mut guard, array).await;
             }
             "dbfilename" => {
                 let array = Array {
@@ -45,16 +50,16 @@ pub async fn process_command(
                     ],
                 };
 
-                write_and_flush(buf_stream, array).await;
+                write_and_flush(&mut guard, array).await;
             }
             unknown => {
                 write_and_flush(
-                    buf_stream,
+                    &mut guard,
                     BaseError {
                         message: format!("Config key '{}' unknown", unknown),
                     },
                 )
-                .await
+                .await;
             }
         },
         Command::Info(_) => {
@@ -72,14 +77,14 @@ pub async fn process_command(
                     .to_string(),
                 ),
             };
-            write_and_flush(buf_stream, replication).await;
+            write_and_flush(&mut guard, replication).await;
         }
         Command::Ping => {
-            write_and_flush(buf_stream, "+PONG\r\n").await;
+            write_and_flush(&mut guard, "+PONG\r\n").await;
         }
         Command::Echo(ref message) => {
             write_and_flush(
-                buf_stream,
+                &mut guard,
                 BulkString {
                     payload: Some(message.to_string()),
                 },
@@ -101,12 +106,12 @@ pub async fn process_command(
                     None => Some(result.to_owned().0),
                 };
 
-                write_and_flush(buf_stream, BulkString { payload: value }).await;
+                write_and_flush(&mut guard, BulkString { payload: value }).await;
             } else {
-                write_and_flush(buf_stream, BulkString { payload: None }).await;
+                write_and_flush(&mut guard, BulkString { payload: None }).await;
             }
         }
-        Command::Set(params) => {
+        Command::Set(ref params) => {
             let value = params.value.to_string();
             let expire_at = match params.px {
                 Some(_) => {
@@ -116,8 +121,12 @@ pub async fn process_command(
             };
 
             map.insert(params.key.to_string(), (value, expire_at));
+            tx.send(command.clone())
+                .await
+                .expect("Failed to send Command to TX");
+
             write_and_flush(
-                buf_stream,
+                &mut guard,
                 BulkString {
                     payload: Some("OK".to_string()),
                 },
@@ -134,7 +143,7 @@ pub async fn process_command(
                 .collect();
 
             write_and_flush(
-                buf_stream,
+                &mut guard,
                 Array {
                     payload: bulk_strings,
                 },
@@ -145,10 +154,15 @@ pub async fn process_command(
             eprintln!("");
         }
         Command::Save => todo!(),
-        Command::ReplConf(_, _) => send_ack(buf_stream).await,
+        Command::ReplConf(_, _) => send_ack(&mut guard).await,
         Command::PSync(_, _) => {
+            assert!(
+                &args.replicaof.is_none(),
+                "Configured as replica. I should never receive this command."
+            );
+
             write_and_flush(
-                buf_stream,
+                &mut guard,
                 SimpleString {
                     value: format!("FULLRESYNC {} 0", rep_ref.replid),
                 },
@@ -157,27 +171,50 @@ pub async fn process_command(
 
             let empty_rdb = "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==".as_bytes();
             let empty_rdb_bytes = general_purpose::STANDARD.decode(empty_rdb).unwrap();
-            write_and_flush(buf_stream, format!("${}\r\n", empty_rdb_bytes.len())).await;
-            write_and_flush(buf_stream, empty_rdb_bytes.as_slice()).await;
+            write_and_flush(&mut guard, format!("${}\r\n", empty_rdb_bytes.len())).await;
+            write_and_flush(&mut guard, empty_rdb_bytes.as_slice()).await;
+
+            println!("Adding replica");
+            replicas.lock().await.push(buf_stream.clone());
+
+            let replicas = replicas.clone();
+            let rx = rx.clone();
+            tokio::spawn(async move {
+                println!("Replication started on master");
+                loop {
+                    let mut rx = rx.lock().await;
+                    for command in rx.recv().await {
+                        println!("Received command for replication: {:?}", command);
+                        let mut guard = replicas.lock().await;
+                        for replica_stream in guard.iter_mut() {
+                            let mut stream = replica_stream.lock().await;
+                            let bytes_written = write_and_flush(&mut stream, command.clone()).await;
+                            println!("Wrote {} bytes for replication", bytes_written);
+                        }
+                    }
+                }
+            });
         }
     }
 }
 
-pub async fn write_and_flush<T>(buf_stream: &mut BufStream<&mut TcpStream>, into_bytes: T)
+pub async fn write_and_flush<T>(tcp_stream: &mut TcpStream, into_bytes: T) -> usize
 where
     T: Into<Vec<u8>>,
 {
     let bytes: Vec<u8> = into_bytes.into();
 
-    buf_stream
+    let bytes = tcp_stream
         .write(bytes.as_slice())
         .await
         .expect("Failed to send bytes");
 
-    buf_stream.flush().await.unwrap();
+    tcp_stream.flush().await.unwrap();
+
+    bytes
 }
 
-pub async fn send_ack(buf_stream: &mut BufStream<&mut TcpStream>) {
+pub async fn send_ack(buf_stream: &mut TcpStream) {
     buf_stream
         .write("+OK\r\n".as_bytes())
         .await
@@ -186,10 +223,11 @@ pub async fn send_ack(buf_stream: &mut BufStream<&mut TcpStream>) {
     buf_stream.flush().await.unwrap();
 }
 
-pub async fn receive_ack(buf_stream: &mut BufStream<&mut TcpStream>) -> anyhow::Result<()> {
+pub async fn receive_ack(buf_stream: &mut TcpStream) -> anyhow::Result<()> {
     let mut ack = String::new();
+    let mut bytes = [0; 5];
     buf_stream
-        .read_line(&mut ack)
+        .read_exact(&mut bytes)
         .await
         .with_context(|| "Failed to receive bytes")?;
 
