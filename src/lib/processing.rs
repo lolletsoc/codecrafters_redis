@@ -161,7 +161,17 @@ pub async fn process_command(
             eprintln!("");
         }
         Command::Save => todo!(),
-        Command::ReplConf(_, _) => send_ack(&mut guard).await,
+        Command::ReplConf(_, _) => {
+            if let Some(_) = &args.replicaof {
+                write_and_flush(
+                    &mut guard,
+                    Command::ReplConf("ACK".to_string(), "0".to_string()),
+                )
+                .await;
+            } else {
+                send_ack(&mut guard).await;
+            }
+        }
         Command::PSync(_, _) => {
             assert!(
                 &args.replicaof.is_none(),

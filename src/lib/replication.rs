@@ -8,7 +8,7 @@ use rand::distr::Alphanumeric;
 use rand::Rng;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, BufStream};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
