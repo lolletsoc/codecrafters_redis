@@ -4,11 +4,11 @@ use redis_starter_rust::models::{to_command, Args, BaseError, Command};
 use redis_starter_rust::processing::{process_command, write_and_flush};
 use redis_starter_rust::rdb::read_rdb;
 use redis_starter_rust::replication::{init_replication, MasterReplicationInfo};
+use std::sync::atomic::{AtomicIsize, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::io::BufStream;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{mpsc, Mutex};
 
@@ -49,11 +49,13 @@ async fn main() -> Result<(), anyhow::Error> {
         let buf_stream = Arc::new(Mutex::new(cloned_buf_stream));
 
         let arc_stream = Arc::new(Mutex::new(TcpStream::from_std(std_stream).unwrap()));
+
+        let offset = AtomicUsize::new(0);
         tokio::spawn(async move {
             loop {
                 let binding = buf_stream.clone();
                 let mut guard = binding.lock().await;
-                let request = to_command(&mut guard).await;
+                let request = to_command(&mut guard, &offset).await;
                 match request {
                     Ok(Some(request)) => {
                         process_command(
@@ -65,6 +67,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             &replicas,
                             &tx,
                             &rx,
+                            &offset,
                         )
                         .await;
                     }
@@ -110,12 +113,14 @@ async fn main() -> Result<(), anyhow::Error> {
                 let cloned_buf_stream = BufStream::new(cloned_tcp_stream);
                 let buf_stream = Arc::new(Mutex::new(cloned_buf_stream));
 
+                let offset = AtomicUsize::new(0);
+
                 let arc_stream = Arc::new(Mutex::new(TcpStream::from_std(std_stream).unwrap()));
                 tokio::spawn(async move {
                     loop {
                         let binding = buf_stream.clone();
                         let mut guard = binding.lock().await;
-                        let request = to_command(&mut guard).await;
+                        let request = to_command(&mut guard, &offset).await;
                         match request {
                             Ok(Some(request)) => {
                                 process_command(
@@ -127,6 +132,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                     &replicas,
                                     &tx,
                                     &rx,
+                                    &offset,
                                 )
                                 .await;
                             }

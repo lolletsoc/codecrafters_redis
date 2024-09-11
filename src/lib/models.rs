@@ -2,6 +2,7 @@ use crate::models::Command::*;
 use anyhow::Context;
 use clap::Parser;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncBufReadExt, BufStream};
 use tokio::net::TcpStream;
 
@@ -204,40 +205,55 @@ impl Into<Vec<u8>> for BulkString {
 
 pub async fn to_command(
     mut buf_stream: &mut BufStream<TcpStream>,
+    offset: &AtomicUsize,
 ) -> anyhow::Result<Option<Request>> {
-    let result = read_cmd_part(&mut buf_stream).await;
-
-    if let Some(part) = result {
+    let mut read_so_far = 0;
+    if let Some((part, bytes_read)) = read_cmd_part(&mut buf_stream).await {
+        read_so_far += bytes_read;
         let num_of_elems = u8::from_str(&part[1usize..2usize])
             .with_context(|| "Expecting length of elements, such as *2")?;
 
-        read_cmd_part(&mut buf_stream).await;
+        let (_, bytes_read) = read_cmd_part(&mut buf_stream).await.unwrap();
+        read_so_far += bytes_read;
 
-        let command = read_cmd_part(&mut buf_stream)
+        let (command, bytes_read) = read_cmd_part(&mut buf_stream)
             .await
             .with_context(|| "Expecting a base command, such as GET")?;
+        read_so_far += bytes_read;
 
         let mut args = Vec::with_capacity((num_of_elems - 1) as usize);
         for _ in 0..num_of_elems - 1 {
-            read_cmd_part(&mut buf_stream).await;
-            let arg = read_cmd_part(&mut buf_stream).await;
-            args.push(arg.unwrap().to_lowercase());
+            let (_, bytes_read) = read_cmd_part(&mut buf_stream).await.unwrap();
+            read_so_far += bytes_read;
+
+            let (arg, bytes_read) = read_cmd_part(&mut buf_stream).await.unwrap();
+            read_so_far += bytes_read;
+
+            args.push(arg.to_lowercase());
         }
 
-        return Ok(Some(Request {
-            command: match command.to_lowercase().as_str() {
-                "ping" => Ping,
-                "info" => Info(args[0].clone()),
-                "echo" => Echo(args[0].clone()),
-                "keys" => Keys(args[0].clone()),
-                "get" => Get(args[0].clone()),
-                "set" => Set(build_set_params(args)),
-                "config" => Config(args[1].clone()),
-                "replconf" => ReplConf(args[0].clone(), args[1].clone()),
-                "psync" => PSync(args[0].clone(), args[1].clone()),
-                unknown => Unknown(unknown.to_string()),
-            },
-        }));
+        let command = match command.to_lowercase().as_str() {
+            "ping" => Ping,
+            "info" => Info(args[0].clone()),
+            "echo" => Echo(args[0].clone()),
+            "keys" => Keys(args[0].clone()),
+            "get" => Get(args[0].clone()),
+            "set" => Set(build_set_params(args)),
+            "config" => Config(args[1].clone()),
+            "replconf" => ReplConf(args[0].clone(), args[1].clone()),
+            "psync" => PSync(args[0].clone(), args[1].clone()),
+            unknown => Unknown(unknown.to_string()),
+        };
+
+        match command {
+            // REPLCONF is added after processing because reasons *shrug*
+            ReplConf(_, _) => {}
+            _ => {
+                offset.fetch_add(read_so_far, Ordering::Relaxed);
+            }
+        }
+
+        return Ok(Some(Request { command }));
     }
     Ok(None)
 }
@@ -257,7 +273,7 @@ fn build_set_params(args: Vec<String>) -> SetParams {
     }
 }
 
-async fn read_cmd_part(buf_stream: &mut BufStream<TcpStream>) -> Option<String> {
+async fn read_cmd_part(buf_stream: &mut BufStream<TcpStream>) -> Option<(String, usize)> {
     let mut command = "".to_owned();
     let bytes_read = buf_stream
         .read_line(&mut command)
@@ -266,7 +282,7 @@ async fn read_cmd_part(buf_stream: &mut BufStream<TcpStream>) -> Option<String> 
 
     if bytes_read > 0 {
         // Remove \r\n
-        Some(command[0..command.len() - 2].to_owned())
+        Some((command[0..command.len() - 2].to_owned(), bytes_read))
     } else {
         None
     }

@@ -4,6 +4,7 @@ use anyhow::Context;
 use base64::{engine::general_purpose, Engine as _};
 use dashmap::DashMap;
 use std::ops::Add;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,6 +21,7 @@ pub async fn process_command(
     replicas: &Arc<Mutex<Vec<Arc<Mutex<TcpStream>>>>>,
     tx: &Arc<Sender<Command>>,
     rx: &Arc<Mutex<Receiver<Command>>>,
+    command_offset: &AtomicUsize,
 ) {
     println!(
         "Processing {:?} as replica: {}",
@@ -68,10 +70,7 @@ pub async fn process_command(
             }
         },
         Command::Info(_) => {
-            let master_or_slave = match args.replicaof {
-                Some(_) => "slave",
-                None => "master",
-            };
+            let master_or_slave = if is_master(&args) { "master" } else { "slave" };
 
             let replication = BulkString {
                 payload: Some(
@@ -85,7 +84,9 @@ pub async fn process_command(
             write_and_flush(&mut guard, replication).await;
         }
         Command::Ping => {
-            write_and_flush(&mut guard, "+PONG\r\n").await;
+            if is_master(args) {
+                write_and_flush(&mut guard, "+PONG\r\n").await;
+            }
         }
         Command::Echo(ref message) => {
             write_and_flush(
@@ -130,7 +131,7 @@ pub async fn process_command(
                 .await
                 .expect("Failed to send Command to TX");
 
-            if args.replicaof.is_none() {
+            if is_master(args) {
                 write_and_flush(
                     &mut guard,
                     BulkString {
@@ -165,9 +166,13 @@ pub async fn process_command(
             if let Some(_) = &args.replicaof {
                 write_and_flush(
                     &mut guard,
-                    Command::ReplConf("ACK".to_string(), "0".to_string()),
+                    Command::ReplConf(
+                        "ACK".to_string(),
+                        command_offset.load(Ordering::Relaxed).to_string(),
+                    ),
                 )
                 .await;
+                command_offset.fetch_add(37, Ordering::Relaxed);
             } else {
                 send_ack(&mut guard).await;
             }
@@ -217,6 +222,10 @@ pub async fn process_command(
             });
         }
     }
+}
+
+fn is_master(args: &Arc<Args>) -> bool {
+    args.replicaof.is_none()
 }
 
 pub async fn write_and_flush<T>(tcp_stream: &mut TcpStream, into_bytes: T) -> usize
