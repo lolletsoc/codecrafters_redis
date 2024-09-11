@@ -90,6 +90,42 @@ struct EncodedString {
 
 // run --package redis-starter-rust --bin redis-starter-rust -- --dir /home/lolletsoc/devel/pets/code_crafters/redis/test --dbfilename dump.rdb
 
+pub async fn read_rdb_from_bytes(
+    bytes: &[u8],
+    arc: Arc<DashMap<String, (String, Option<SystemTime>)>>,
+) -> anyhow::Result<()> {
+    match RDB::from_bytes((&bytes, 0)) {
+        Ok((_, rdb)) => {
+            rdb.database.kv_pairs.iter().for_each(|e| {
+                let expire_duration;
+                if let Some(ms_expiry) = e.expiry_time_in_ms {
+                    expire_duration = Some(Duration::from_millis(ms_expiry));
+                } else if let Some(s_expiry) = e.expiry_time_in_s {
+                    expire_duration = Some(Duration::from_secs(s_expiry as u64));
+                } else {
+                    expire_duration = None;
+                }
+
+                arc.insert(
+                    String::from_utf8(e.key.value.clone()).unwrap(),
+                    (
+                        String::from_utf8(e.value.value.clone()).unwrap(),
+                        match expire_duration {
+                            Some(dur) => Some(UNIX_EPOCH.add(dur)),
+                            None => None,
+                        },
+                    ),
+                );
+            });
+            Ok(())
+        }
+        Err(err) => {
+            // Failed to parse
+            Err(anyhow::anyhow!(err))
+        }
+    }
+}
+
 pub async fn read_rdb(
     dir: &str,
     filename: &str,

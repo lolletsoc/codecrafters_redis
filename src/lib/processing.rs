@@ -21,6 +21,11 @@ pub async fn process_command(
     tx: &Arc<Sender<Command>>,
     rx: &Arc<Mutex<Receiver<Command>>>,
 ) {
+    println!(
+        "Processing {:?} as replica: {}",
+        command,
+        args.replicaof.is_some()
+    );
     let mut guard = buf_stream.lock().await;
     match command {
         Command::Config(field) => match field.as_str() {
@@ -125,13 +130,15 @@ pub async fn process_command(
                 .await
                 .expect("Failed to send Command to TX");
 
-            write_and_flush(
-                &mut guard,
-                BulkString {
-                    payload: Some("OK".to_string()),
-                },
-            )
-            .await;
+            if args.replicaof.is_none() {
+                write_and_flush(
+                    &mut guard,
+                    BulkString {
+                        payload: Some("OK".to_string()),
+                    },
+                )
+                .await;
+            }
         }
         Command::Keys(_) => {
             // Assuming a wildcard ('*') for now
@@ -171,8 +178,12 @@ pub async fn process_command(
 
             let empty_rdb = "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==".as_bytes();
             let empty_rdb_bytes = general_purpose::STANDARD.decode(empty_rdb).unwrap();
-            write_and_flush(&mut guard, format!("${}\r\n", empty_rdb_bytes.len())).await;
-            write_and_flush(&mut guard, empty_rdb_bytes.as_slice()).await;
+
+            println!("len of empty: {}", empty_rdb_bytes.len());
+
+            let bytes = empty_rdb_bytes.as_slice();
+            write_and_flush(&mut guard, format!("${}\r\n", bytes.len())).await;
+            write_and_flush(&mut guard, bytes).await;
 
             println!("Adding replica");
             replicas.lock().await.push(buf_stream.clone());
@@ -223,10 +234,10 @@ pub async fn send_ack(buf_stream: &mut TcpStream) {
     buf_stream.flush().await.unwrap();
 }
 
-pub async fn receive_ack(buf_stream: &mut TcpStream) -> anyhow::Result<()> {
+pub async fn receive_ack(tcp_stream: &mut TcpStream) -> anyhow::Result<()> {
     let mut ack = String::new();
     let mut bytes = [0; 5];
-    buf_stream
+    tcp_stream
         .read_exact(&mut bytes)
         .await
         .with_context(|| "Failed to receive bytes")?;
